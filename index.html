@@ -25,8 +25,19 @@
         // Enable Firestore debug logging
         setLogLevel('debug');
 
-        // --- Use THE SAME Firebase Config as the user app ---
-        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+        // --- [FIXED] Use THE SAME Firebase Config as the user app ---
+        // Reverted to the hardcoded config from your original file, 
+        // as __firebase_config is not available on GitHub Pages.
+        const firebaseConfig = {
+            apiKey: "AIzaSyDjr_Ha2RxOWEumjEeSdluIW3JmyM76mVk",
+            authDomain: "dipermisstion.firebaseapp.com",
+            projectId: "dipermisstion",
+            storageBucket: "dipermisstion.firebasestorage.app",
+            messagingSenderId: "512999406057",
+            appId: "1:512999406057:web:953a281ab9dde7a9a0f378",
+            measurementId: "G-KDPHXZ7H4B"
+        };
+        // --- End of Fix ---
 
         // --- Global State & Element References ---
         let db, auth;
@@ -92,6 +103,7 @@
 
             // --- Initialize Firebase ---
             try {
+                // This check will now pass with the hardcoded config
                 if (!firebaseConfig.projectId) throw new Error("Firebase config is missing or invalid.");
                 const app = initializeApp(firebaseConfig);
                 db = getFirestore(app);
@@ -112,6 +124,7 @@
                      } else {
                          console.log("Admin App: No user. Attempting sign-in...");
                          // Use custom token if available, else sign in anonymously
+                         // This will correctly fall back to anonymous sign-in on GitHub Pages
                          if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
                              signInWithCustomToken(auth, __initial_auth_token).catch(tokenError => {
                                  console.error("Admin App: Custom Token Sign-In Error:", tokenError);
