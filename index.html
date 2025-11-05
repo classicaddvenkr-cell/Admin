@@ -123,19 +123,16 @@
                          updateActiveNavButton(currentFilter); // Highlight active button
                      } else {
                          console.log("Admin App: No user. Attempting sign-in...");
-                         // Use custom token if available, else sign in anonymously
-                         // This will correctly fall back to anonymous sign-in on GitHub Pages
-                         if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                             signInWithCustomToken(auth, __initial_auth_token).catch(tokenError => {
-                                 console.error("Admin App: Custom Token Sign-In Error:", tokenError);
-                                 signInAnonymously(auth).catch(anonError => console.error("Admin App: Anonymous Sign-In Error after token fail:", anonError));
-                             });
-                         } else {
-                             signInAnonymously(auth).catch(anonError => {
-                                 console.error("Admin App: Anonymous Sign-In Error:", anonError);
-                                 showError(`Critical Error: មិនអាច Sign In បានទេ។ ${anonError.message}។`);
-                             });
-                         }
+                         
+                         // [FIX] Removed custom token logic. 
+                         // The __initial_auth_token is from the Canvas environment and will not work
+                         // with this hardcoded Firebase project ('dipermisstion').
+                         // We must always sign in anonymously for this external admin panel.
+                         console.log("Admin App: Attempting anonymous sign-in...");
+                         signInAnonymously(auth).catch(anonError => {
+                             console.error("Admin App: Anonymous Sign-In Error:", anonError);
+                             showError(`Critical Error: មិនអាច Sign In បានទេ។ ${anonError.message}។`);
+                         });
                      }
                  });
 
@@ -351,10 +348,25 @@
                             ${deleteButton}
                         </div>
                     </div>
-                    <div class="mb-3">
-                        <p class="font-semibold text-lg text-gray-800">${request.name || 'N/A'} <span class="text-sm font-normal text-gray-500">(${request.userId || 'N/A'})</span></p>
-                        <p class="text-sm text-gray-600">${request.department || 'N/A'}</p>
+                    
+                    <!-- [MODIFIED] Added Photo Placeholder -->
+                    <div class="mb-3 flex items-center gap-3">
+                        <!-- Photo/Icon Placeholder -->
+                        <div class="flex-shrink-0">
+                            ${
+                                request.photo
+                                ? `<img src="${request.photo}" alt="${request.name || 'Photo'}" class="w-12 h-12 rounded-full object-cover border-2 border-gray-100 shadow-sm" onerror="this.onerror=null; this.src='https://placehold.co/48x48/e2e8f0/64748b?text=?';">`
+                                : `<div class="w-12 h-12 rounded-full bg-gray-200 text-gray-500 flex items-center justify-center"><i class="fas fa-user fa-lg"></i></div>`
+                            }
+                        </div>
+                        <!-- Name/Dept Info -->
+                        <div>
+                            <p class="font-semibold text-lg text-gray-800">${request.name || 'N/A'} <span class="text-sm font-normal text-gray-500">(${request.userId || 'N/A'})</span></p>
+                            <p class="text-sm text-gray-600">${request.department || 'N/A'}</p>
+                        </div>
                     </div>
+                    <!-- [END MODIFIED] -->
+
                     <div class="text-sm space-y-1.5 mb-3">
                         <div class="flex"><strong class="font-medium text-gray-500 w-20 inline-block shrink-0"><i class="far fa-calendar-alt fa-fw mr-1.5 text-blue-500"></i>កាលបរិច្ឆេទ:</strong> <span class="text-gray-700">${dateString}</span></div>
                         <div class="flex"><strong class="font-medium text-gray-500 w-20 inline-block shrink-0"><i class="far fa-clock fa-fw mr-1.5 text-blue-500"></i>រយៈពេល:</strong> <span class="text-gray-700">${request.duration || 'N/A'}</span></div>
