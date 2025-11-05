@@ -19,15 +19,12 @@
         import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import {
             getFirestore, doc, updateDoc, deleteDoc, collection, query, where, onSnapshot, serverTimestamp, Timestamp, setLogLevel,
-            // orderBy // <<< Removed orderBy import
         } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         // Enable Firestore debug logging
         setLogLevel('debug');
 
-        // --- [FIXED] Use THE SAME Firebase Config as the user app ---
-        // Reverted to the hardcoded config from your original file, 
-        // as __firebase_config is not available on GitHub Pages.
+        // --- Firebase Config ---
         const firebaseConfig = {
             apiKey: "AIzaSyDjr_Ha2RxOWEumjEeSdluIW3JmyM76mVk",
             authDomain: "dipermisstion.firebaseapp.com",
@@ -37,24 +34,32 @@
             appId: "1:512999406057:web:953a281ab9dde7a9a0f378",
             measurementId: "G-KDPHXZ7H4B"
         };
-        // --- End of Fix ---
 
         // --- Global State & Element References ---
         let db, auth;
-        let requestsUnsubscribe = null; // Single listener for both types
-        const ADMIN_NAME = "Admin Daro"; // Hardcoded admin name
+        let requestsUnsubscribe = null;
+        const ADMIN_NAME = "Admin Daro";
+        let globalAllRequests = []; // For detail modal
 
-        // --- Firestore Collection Path (MUST MATCH USER APP) ---
+        // --- Firestore Collection Path ---
         let leaveRequestsCollectionPath;
         let outRequestsCollectionPath;
 
         // --- Element References ---
-        let requestListContainer, loadingIndicator, emptyPlaceholder, errorDisplay, footerNav;
+        let mainContentArea, requestListContainer, loadingIndicator, emptyPlaceholder, errorDisplay, footerNav;
+        let settingsPage, toggleMonthFilter, toggleCompactView;
         let currentFilter = 'pending'; // Default filter
+
+        // --- [NEW] Settings State ---
+        let settings = {
+            filterCurrentMonth: false,
+            compactViewApproved: false
+        };
 
         // --- Modal References ---
         let confirmationModal, confirmationTitle, confirmationMessage, confirmYesBtn, confirmNoBtn;
         let customAlertModal, customAlertTitle, customAlertMessage, customAlertIconSuccess, customAlertIconWarning;
+        let requestDetailModal, detailModalContent, detailModalCloseBtn;
 
 
         // --- Helper: Format Timestamp ---
@@ -76,15 +81,43 @@
              return `${hours}:${minutes} ${day}/${month}/${year}`;
         }
 
+        // --- [NEW] Settings Functions ---
+        function loadSettings() {
+            try {
+                const savedSettings = localStorage.getItem('adminSettings');
+                if (savedSettings) {
+                    settings = JSON.parse(savedSettings);
+                }
+            } catch (e) {
+                console.error("Failed to load settings:", e);
+                localStorage.removeItem('adminSettings'); // Clear corrupted settings
+            }
+            // Update UI elements based on loaded settings
+            if (toggleMonthFilter) toggleMonthFilter.checked = settings.filterCurrentMonth;
+            if (toggleCompactView) toggleCompactView.checked = settings.compactViewApproved;
+        }
+
+        function saveSettings() {
+            try {
+                localStorage.setItem('adminSettings', JSON.stringify(settings));
+            } catch (e) {
+                console.error("Failed to save settings:", e);
+            }
+        }
+
         // --- App Initialization ---
         document.addEventListener('DOMContentLoaded', async () => {
 
             // --- Assign Element References ---
+            mainContentArea = document.getElementById('main-content-area');
             requestListContainer = document.getElementById('request-list');
             loadingIndicator = document.getElementById('loading-indicator');
             emptyPlaceholder = document.getElementById('empty-placeholder');
             errorDisplay = document.getElementById('error-display');
             footerNav = document.getElementById('footer-nav');
+            settingsPage = document.getElementById('settings-page');
+            toggleMonthFilter = document.getElementById('toggle-month-filter');
+            toggleCompactView = document.getElementById('toggle-compact-view');
 
             // --- Assign Modal Elements ---
             customAlertModal = document.getElementById('custom-alert-modal');
@@ -98,12 +131,18 @@
             confirmationMessage = document.getElementById('confirmation-message');
             confirmYesBtn = document.getElementById('confirm-yes-btn');
             confirmNoBtn = document.getElementById('confirm-no-btn');
+
+            requestDetailModal = document.getElementById('request-detail-modal');
+            detailModalContent = document.getElementById('detail-modal-content');
+            detailModalCloseBtn = document.getElementById('detail-modal-close-btn');
             
             const customAlertOkBtn = document.getElementById('custom-alert-ok-btn');
 
+            // --- Load Settings from localStorage ---
+            loadSettings();
+
             // --- Initialize Firebase ---
             try {
-                // This check will now pass with the hardcoded config
                 if (!firebaseConfig.projectId) throw new Error("Firebase config is missing or invalid.");
                 const app = initializeApp(firebaseConfig);
                 db = getFirestore(app);
@@ -122,13 +161,7 @@
                          setupRequestListener(currentFilter); // Use default filter
                          updateActiveNavButton(currentFilter); // Highlight active button
                      } else {
-                         console.log("Admin App: No user. Attempting sign-in...");
-                         
-                         // [FIX] Removed custom token logic. 
-                         // The __initial_auth_token is from the Canvas environment and will not work
-                         // with this hardcoded Firebase project ('dipermisstion').
-                         // We must always sign in anonymously for this external admin panel.
-                         console.log("Admin App: Attempting anonymous sign-in...");
+                         console.log("Admin App: No user. Attempting anonymous sign-in...");
                          signInAnonymously(auth).catch(anonError => {
                              console.error("Admin App: Anonymous Sign-In Error:", anonError);
                              showError(`Critical Error: មិនអាច Sign In បានទេ។ ${anonError.message}។`);
@@ -141,51 +174,91 @@
                 showError(`Critical Error: មិនអាច​តភ្ជាប់ Firebase បាន​ទេ។ ${e.message}។ សូម Refresh ម្ដងទៀត។`);
             }
 
-            // --- [NEW] Footer Navigation Listener ---
+            // --- Footer Navigation Listener ---
             if (footerNav) {
                 footerNav.addEventListener('click', (event) => {
                     const navButton = event.target.closest('.filter-nav-btn');
                     if (navButton && navButton.dataset.filter) {
                         const newFilter = navButton.dataset.filter;
-                        if (newFilter !== currentFilter) {
-                            console.log("Filter changed to:", newFilter);
-                            currentFilter = newFilter;
-                            setupRequestListener(currentFilter);
-                            updateActiveNavButton(currentFilter);
+                        
+                        // Handle Settings Page
+                        if (newFilter === 'settings') {
+                            if (mainContentArea) mainContentArea.classList.add('hidden');
+                            if (settingsPage) settingsPage.classList.remove('hidden');
+                            currentFilter = 'settings';
+                        } else {
+                            // Handle Request List Pages
+                            if (mainContentArea) mainContentArea.classList.remove('hidden');
+                            if (settingsPage) settingsPage.classList.add('hidden');
+                            
+                            if (newFilter !== currentFilter) {
+                                console.log("Filter changed to:", newFilter);
+                                currentFilter = newFilter;
+                                setupRequestListener(currentFilter);
+                            }
+                        }
+                        updateActiveNavButton(currentFilter);
+                    }
+                });
+            }
+
+            // --- Event Listener for Card Action Buttons & Compact Cards ---
+            if (requestListContainer) {
+                requestListContainer.addEventListener('click', (event) => {
+                    const actionButton = event.target.closest('.action-btn');
+                    const compactCard = event.target.closest('.compact-card-btn');
+                    
+                    if (actionButton) {
+                        promptForAdminAction(actionButton); // Pass the button
+                    } else if (compactCard) {
+                        const { id, type } = compactCard.dataset;
+                        const request = globalAllRequests.find(r => r.id === id && r.type === type);
+                        if (request) {
+                            showRequestDetailModal(request);
                         }
                     }
                 });
             }
 
-            // --- Event Listener for Card Action Buttons (Approve/Reject/Delete) ---
-            if (requestListContainer) {
-                requestListContainer.addEventListener('click', promptForAdminAction);
-            }
 
             // --- Listeners for Modals ---
-            if (customAlertOkBtn) {
-                customAlertOkBtn.addEventListener('click', hideCustomAlert);
-            }
-            if (confirmNoBtn) {
-                confirmNoBtn.addEventListener('click', () => {
-                    if (confirmationModal) confirmationModal.classList.add('hidden');
-                });
-            }
+            if (customAlertOkBtn) customAlertOkBtn.addEventListener('click', hideCustomAlert);
+            if (confirmNoBtn) confirmNoBtn.addEventListener('click', () => confirmationModal.classList.add('hidden'));
+            if (detailModalCloseBtn) detailModalCloseBtn.addEventListener('click', hideRequestDetailModal);
+            if (requestDetailModal) requestDetailModal.addEventListener('click', (e) => { if(e.target === requestDetailModal) hideRequestDetailModal(); }); // Hide on backdrop click
+
             if (confirmYesBtn) {
                 confirmYesBtn.addEventListener('click', () => {
-                    // Get data stored on the button
                     const { id, type, action } = confirmYesBtn.dataset;
-                    if (id && type && action) {
-                        // Call the function that *actually* executes the update
-                        executeAdminAction(id, type, action); 
-                    }
-                    if (confirmationModal) confirmationModal.classList.add('hidden');
+                    if (id && type && action) executeAdminAction(id, type, action); 
+                    confirmationModal.classList.add('hidden');
                 });
             }
+
+            // --- [NEW] Listeners for Settings Toggles ---
+            if (toggleMonthFilter) {
+                toggleMonthFilter.addEventListener('change', (e) => {
+                    settings.filterCurrentMonth = e.target.checked;
+                    saveSettings();
+                    // Re-fetch data with new filter setting
+                    if (currentFilter !== 'settings') setupRequestListener(currentFilter);
+                });
+            }
+            if (toggleCompactView) {
+                toggleCompactView.addEventListener('change', (e) => {
+                    settings.compactViewApproved = e.target.checked;
+                    saveSettings();
+                    // Re-render list if we are on the 'approved' page
+                    if (currentFilter === 'approved') {
+                        sortAndRenderRequests(globalAllRequests, currentFilter);
+                    }
+                });
+            }
+
 
         }); // End DOMContentLoaded
 
-        // --- [NEW] Update Active Nav Button ---
+        // --- Update Active Nav Button ---
         function updateActiveNavButton(activeFilter) {
             if (!footerNav) return;
             const buttons = footerNav.querySelectorAll('.filter-nav-btn');
@@ -236,8 +309,24 @@
                 const unsubscribe = onSnapshot(q, (snapshot) => {
                     console.log(`Snapshot received for ${collectionPath.split('/').pop()}, Status: ${statusFilter}, Size: ${snapshot.size}`);
                     const type = collectionPath.includes('leave_requests') ? 'leave' : 'out';
-                    const currentDocs = [];
+                    
+                    let currentDocs = [];
                     snapshot.forEach(doc => { currentDocs.push({ ...doc.data(), id: doc.id, type: type }); });
+
+                    // [NEW] Apply month filter if active
+                    if (settings.filterCurrentMonth) {
+                        const now = new Date();
+                        const currentMonthYear = `${String(now.getMonth() + 1).padStart(2, '0')}/${now.getFullYear()}`; // e.g., "11/2025"
+                        
+                        currentDocs = currentDocs.filter(doc => {
+                            // We check string dates. This assumes DD/MM/YYYY format.
+                            const startsInMonth = doc.startDate && doc.startDate.endsWith(currentMonthYear);
+                            const endsInMonth = doc.endDate && doc.endDate.endsWith(currentMonthYear);
+                            return startsInMonth || endsInMonth;
+                        });
+                        console.log(`Client-side month filter (${currentMonthYear}) applied to ${collectionPath.split('/').pop()}: ${currentDocs.length} results.`);
+                    }
+
                     allRequests = allRequests.filter(req => req.type !== type).concat(currentDocs);
                     sortAndRenderRequests(allRequests, statusFilter);
                     if (initialLoadsPending > 0) {
@@ -259,6 +348,8 @@
 
         // --- Sort and Render Combined Requests ---
          function sortAndRenderRequests(requests, currentFilter) {
+             globalAllRequests = [...requests]; // [NEW] Store for detail modal
+             
              requests.sort((a, b) => {
                  const statusPriority = { 'pending': 1, 'editing': 2, 'approved': 3, 'rejected': 4 };
                  const priorityA = statusPriority[a.status] || 5;
@@ -274,35 +365,57 @@
         // --- Render Request List ---
         function renderRequestList(requests) {
             if (!requestListContainer || !loadingIndicator || !emptyPlaceholder) return;
-            if (requests.length === 0) {
-                if (loadingIndicator && loadingIndicator.classList.contains('hidden') && emptyPlaceholder) emptyPlaceholder.classList.remove('hidden');
-                requestListContainer.innerHTML = '';
+            
+            // [NEW] Check for Compact View
+            if (currentFilter === 'approved' && settings.compactViewApproved) {
+                requestListContainer.className = "grid grid-cols-3 gap-2 pb-20"; // 3-col grid
+                requestListContainer.innerHTML = requests.map(req => renderCompactCard(req)).join('');
             } else {
-                if(emptyPlaceholder) emptyPlaceholder.classList.add('hidden');
+                requestListContainer.className = "space-y-4 pb-20"; // Reset to single col
                 requestListContainer.innerHTML = requests.map(req => renderRequestCard(req)).join('');
             }
+
+            if (requests.length === 0) {
+                if (loadingIndicator && loadingIndicator.classList.contains('hidden') && emptyPlaceholder) emptyPlaceholder.classList.remove('hidden');
+                requestListContainer.innerHTML = ''; // Clear grid/space classes if empty
+            } else {
+                if(emptyPlaceholder) emptyPlaceholder.classList.add('hidden');
+            }
+        }
+        
+        // --- [NEW] Render Compact Card ---
+        function renderCompactCard(request) {
+            const typeText = request.type === 'leave' ? 'ច្បាប់ឈប់' : 'ចេញក្រៅ';
+            const typeColor = request.type === 'leave' ? 'bg-blue-100 text-blue-800' : 'bg-green-100 text-green-800';
+            return `
+            <div class="compact-card-btn bg-white border border-gray-200 rounded-lg p-2 shadow-sm hover:shadow-md hover:border-blue-400 cursor-pointer transition-all duration-150" data-id="${request.id}" data-type="${request.type}">
+                <div class="flex items-center gap-2">
+                    ${request.photo ? `<img src="${request.photo}" class="w-8 h-8 rounded-full object-cover flex-shrink-0" onerror="this.onerror=null; this.src='https://placehold.co/32x32/e2e8f0/64748b?text=?';">` : `<div class="w-8 h-8 rounded-full bg-gray-200 text-gray-500 flex items-center justify-center flex-shrink-0"><i class="fas fa-user"></i></div>`}
+                    <div class="overflow-hidden min-w-0">
+                        <p class="text-xs font-semibold truncate text-gray-800">${request.name || 'N/A'}</p>
+                        <p class="text-xs text-gray-500 truncate">(${request.userId || 'N/A'})</p>
+                    </div>
+                </div>
+                <span class="text-[10px] font-medium px-1.5 py-0.5 rounded ${typeColor} mt-1.5 inline-block">${typeText}</span>
+                <p class="text-xs text-gray-600 mt-1 truncate">${request.startDate || ''}</p>
+            </div>
+            `;
         }
 
-        // --- Render Single Request Card ---
+        // --- Render Single Request Card (Full Detail) ---
         function renderRequestCard(request) {
             if (!request || !request.id) return '';
+            
+            const deleteButton = `
+                <button data-id="${request.id}" data-type="${request.type}" data-action="delete" class="action-btn text-gray-400 hover:text-red-600 transition-colors duration-150 p-1 rounded-full">
+                    <i class="fas fa-trash-alt fa-fw"></i>
+                </button>
+            `;
 
-            const typeText = request.type === 'leave' ? 'ច្បាប់ឈប់សម្រាក' : 'ច្បាប់ចេញក្រៅ';
-            const typeColor = request.type === 'leave' ? 'bg-blue-100 text-blue-800' : 'bg-green-100 text-green-800';
-            const dateString = (request.startDate === request.endDate) ? request.startDate : `${request.startDate} ដល់ ${request.endDate}`;
-            const requestedAtFormatted = formatFirestoreTimestamp(request.requestedAt, 'HH:mm dd/MM/yyyy');
-
-            let statusBadge = '';
             let actionButtons = '';
-            let statusText = request.status || 'N/A';
-            let statusBgColor = 'bg-gray-100';
-            let statusTextColor = 'text-gray-800';
-
             switch (request.status) {
                 case 'pending':
                 case 'editing':
-                    statusText = request.status === 'editing' ? 'កំពុងកែ' : 'រង់ចាំ';
-                    statusBgColor = 'bg-yellow-100'; statusTextColor = 'text-yellow-800';
                     actionButtons = `
                         <div class="flex flex-col sm:flex-row gap-2 mt-4 pt-3 border-t border-gray-100">
                             <button data-id="${request.id}" data-type="${request.type}" data-action="approve" class="flex-1 action-btn bg-green-500 hover:bg-green-600 text-white text-sm font-semibold py-2 px-4 rounded-lg shadow-sm transition duration-150 ease-in-out flex items-center justify-center gap-1.5">
@@ -313,12 +426,37 @@
                             </button>
                         </div>`;
                     break;
-                case 'approved':
-                    statusText = 'បានយល់ព្រម'; statusBgColor = 'bg-green-100'; statusTextColor = 'text-green-800';
-                    break;
-                case 'rejected':
-                    statusText = 'បានបដិសេធ'; statusBgColor = 'bg-red-100'; statusTextColor = 'text-red-800';
-                    break;
+            }
+
+            // [NEW] Use helper function to get inner HTML
+            const detailHtml = getRequestDetailHtml(request, deleteButton); 
+
+            return `
+                <div class="bg-white border border-gray-200 rounded-lg shadow-md p-4 mb-4 break-inside-avoid hover:shadow-lg transition-shadow duration-200">
+                    ${detailHtml}
+                    ${actionButtons}
+                </div>`;
+        }
+        
+        // --- [NEW] Helper to generate detail HTML for Full Card and Modal ---
+        function getRequestDetailHtml(request, extraHeaderHtml = '') {
+            if (!request || !request.id) return '';
+
+            const typeText = request.type === 'leave' ? 'ច្បាប់ឈប់សម្រាក' : 'ច្បាប់ចេញក្រៅ';
+            const typeColor = request.type === 'leave' ? 'bg-blue-100 text-blue-800' : 'bg-green-100 text-green-800';
+            const dateString = (request.startDate === request.endDate) ? request.startDate : `${request.startDate} ដល់ ${request.endDate}`;
+            const requestedAtFormatted = formatFirestoreTimestamp(request.requestedAt, 'HH:mm dd/MM/yyyy');
+
+            let statusBadge = '';
+            let statusText = request.status || 'N/A';
+            let statusBgColor = 'bg-gray-100';
+            let statusTextColor = 'text-gray-800';
+
+            switch (request.status) {
+                case 'pending': statusText = 'រង់ចាំ'; statusBgColor = 'bg-yellow-100'; statusTextColor = 'text-yellow-800'; break;
+                case 'editing': statusText = 'កំពុងកែ'; statusBgColor = 'bg-yellow-100'; statusTextColor = 'text-yellow-800'; break;
+                case 'approved': statusText = 'បានយល់ព្រម'; statusBgColor = 'bg-green-100'; statusTextColor = 'text-green-800'; break;
+                case 'rejected': statusText = 'បានបដិសេធ'; statusBgColor = 'bg-red-100'; statusTextColor = 'text-red-800'; break;
             }
             statusBadge = `<span class="text-xs font-bold px-2.5 py-1 rounded-full ${statusBgColor} ${statusTextColor}">${statusText}</span>`;
 
@@ -332,56 +470,54 @@
                    returnInfo = `<div class="text-xs text-green-700 font-medium mt-1.5"><i class="fas fa-door-open fa-fw mr-1"></i> បានចូលវិញ: ${request.returnedAt || ''}</div>`;
                }
 
-            // [NEW] Delete Button
-            const deleteButton = `
-                <button data-id="${request.id}" data-type="${request.type}" data-action="delete" class="action-btn text-gray-400 hover:text-red-600 transition-colors duration-150 p-1 rounded-full">
-                    <i class="fas fa-trash-alt fa-fw"></i>
-                </button>
-            `;
-
             return `
-                <div class="bg-white border border-gray-200 rounded-lg shadow-md p-4 mb-4 break-inside-avoid hover:shadow-lg transition-shadow duration-200">
-                    <div class="flex justify-between items-center mb-3 pb-2 border-b border-gray-100">
-                        <span class="text-xs font-semibold px-2 py-0.5 rounded ${typeColor}">${typeText}</span>
-                        <div class="flex items-center gap-2">
-                            ${statusBadge}
-                            ${deleteButton}
-                        </div>
+                <div class="flex justify-between items-center mb-3 pb-2 border-b border-gray-100">
+                    <span class="text-xs font-semibold px-2 py-0.5 rounded ${typeColor}">${typeText}</span>
+                    <div class="flex items-center gap-2">
+                        ${statusBadge}
+                        ${extraHeaderHtml}
                     </div>
-                    
-                    <!-- [MODIFIED] Added Photo Placeholder -->
-                    <div class="mb-3 flex items-center gap-3">
-                        <!-- Photo/Icon Placeholder -->
-                        <div class="flex-shrink-0">
-                            ${
-                                request.photo
-                                ? `<img src="${request.photo}" alt="${request.name || 'Photo'}" class="w-12 h-12 rounded-full object-cover border-2 border-gray-100 shadow-sm" onerror="this.onerror=null; this.src='https://placehold.co/48x48/e2e8f0/64748b?text=?';">`
-                                : `<div class="w-12 h-12 rounded-full bg-gray-200 text-gray-500 flex items-center justify-center"><i class="fas fa-user fa-lg"></i></div>`
-                            }
-                        </div>
-                        <!-- Name/Dept Info -->
-                        <div>
-                            <p class="font-semibold text-lg text-gray-800">${request.name || 'N/A'} <span class="text-sm font-normal text-gray-500">(${request.userId || 'N/A'})</span></p>
-                            <p class="text-sm text-gray-600">${request.department || 'N/A'}</p>
-                        </div>
+                </div>
+                
+                <div class="mb-3 flex items-center gap-3">
+                    <div class="flex-shrink-0">
+                        ${ request.photo
+                            ? `<img src="${request.photo}" alt="${request.name || 'Photo'}" class="w-12 h-12 rounded-full object-cover border-2 border-gray-100 shadow-sm" onerror="this.onerror=null; this.src='https://placehold.co/48x48/e2e8f0/64748b?text=?';">`
+                            : `<div class="w-12 h-12 rounded-full bg-gray-200 text-gray-500 flex items-center justify-center"><i class="fas fa-user fa-lg"></i></div>`
+                        }
                     </div>
-                    <!-- [END MODIFIED] -->
+                    <div>
+                        <p class="font-semibold text-lg text-gray-800">${request.name || 'N/A'} <span class="text-sm font-normal text-gray-500">(${request.userId || 'N/A'})</span></p>
+                        <p class="text-sm text-gray-600">${request.department || 'N/A'}</p>
+                    </div>
+                </div>
 
-                    <div class="text-sm space-y-1.5 mb-3">
-                        <div class="flex"><strong class="font-medium text-gray-500 w-20 inline-block shrink-0"><i class="far fa-calendar-alt fa-fw mr-1.5 text-blue-500"></i>កាលបរិច្ឆេទ:</strong> <span class="text-gray-700">${dateString}</span></div>
-                        <div class="flex"><strong class="font-medium text-gray-500 w-20 inline-block shrink-0"><i class="far fa-clock fa-fw mr-1.5 text-blue-500"></i>រយៈពេល:</strong> <span class="text-gray-700">${request.duration || 'N/A'}</span></div>
-                        <div class="flex"><strong class="font-medium text-gray-500 w-20 inline-block shrink-0 align-top"><i class="fas fa-info-circle fa-fw mr-1.5 text-blue-500"></i>មូលហេតុ:</strong> <span class="whitespace-pre-line inline-block text-gray-700">${request.reason || 'N/A'}</span></div>
-                         <div class="flex"><strong class="font-medium text-gray-500 w-20 inline-block shrink-0"><i class="far fa-paper-plane fa-fw mr-1.5 text-blue-500"></i>សុំនៅ:</strong> <span class="text-gray-700 text-xs">${requestedAtFormatted}</span></div>
-                    </div>
-                    ${decisionInfo}
-                    ${returnInfo}
-                    ${actionButtons}
-                </div>`;
+                <div class="text-sm space-y-1.5 mb-3">
+                    <div class="flex"><strong class="font-medium text-gray-500 w-20 inline-block shrink-0"><i class="far fa-calendar-alt fa-fw mr-1.5 text-blue-500"></i>កាលបរិច្ឆេទ:</strong> <span class="text-gray-700">${dateString}</span></div>
+                    <div class="flex"><strong class="font-medium text-gray-500 w-20 inline-block shrink-0"><i class="far fa-clock fa-fw mr-1.5 text-blue-500"></i>រយៈពេល:</strong> <span class="text-gray-700">${request.duration || 'N/A'}</span></div>
+                    <div class="flex"><strong class="font-medium text-gray-500 w-20 inline-block shrink-0 align-top"><i class="fas fa-info-circle fa-fw mr-1.5 text-blue-500"></i>មូលហេតុ:</strong> <span class="whitespace-pre-line inline-block text-gray-700">${request.reason || 'N/A'}</span></div>
+                     <div class="flex"><strong class="font-medium text-gray-500 w-20 inline-block shrink-0"><i class="far fa-paper-plane fa-fw mr-1.5 text-blue-500"></i>សុំនៅ:</strong> <span class="text-gray-700 text-xs">${requestedAtFormatted}</span></div>
+                </div>
+                ${decisionInfo}
+                ${returnInfo}
+            `;
         }
 
-        // --- [MODIFIED] Prompt for Admin Action (Handles Approve/Reject/Delete) ---
-        function promptForAdminAction(event) {
-            const button = event.target.closest('.action-btn');
+        // --- [NEW] Show/Hide Request Detail Modal ---
+        function showRequestDetailModal(request) {
+            if (!requestDetailModal || !detailModalContent) return;
+            // Generate detail HTML (without delete button in the modal)
+            detailModalContent.innerHTML = getRequestDetailHtml(request, '');
+            requestDetailModal.classList.remove('hidden');
+        }
+        function hideRequestDetailModal() {
+            if (requestDetailModal) requestDetailModal.classList.add('hidden');
+            if (detailModalContent) detailModalContent.innerHTML = ''; // Clear content
+        }
+
+
+        // --- Prompt for Admin Action (Handles Approve/Reject/Delete) ---
+        function promptForAdminAction(button) { // Now accepts the button element
             if (!button) return;
 
             const requestId = button.dataset.id;
@@ -421,7 +557,7 @@
         }
 
 
-        // --- [MODIFIED] Execute Admin Action (Handles Approve/Reject/Delete) ---
+        // --- Execute Admin Action (Handles Approve/Reject/Delete) ---
         async function executeAdminAction(requestId, requestType, action) {
             
             if (!requestId || !requestType || !action) { 
@@ -431,11 +567,10 @@
             
             console.log(`Executing Action: ${action}, Type: ${requestType}, ID: ${requestId}`);
 
-            // Find the original button on the card to show loading state
             const originalButton = document.querySelector(`.action-btn[data-id="${requestId}"][data-action="${action}"]`);
             if (originalButton) {
                 originalButton.disabled = true;
-                originalButton.innerHTML = `<i class="fas fa-spinner fa-spin"></i>`; // Spinner only for delete
+                originalButton.innerHTML = `<i class="fas fa-spinner fa-spin"></i>`;
                 if (action !== 'delete') {
                    originalButton.innerHTML = `<i class="fas fa-spinner fa-spin mr-1"></i> កំពុងដំណើរការ...`;
                 }
@@ -448,7 +583,6 @@
 
             try {
                 if (action === 'approve' || action === 'reject') {
-                    // --- Handle Approve/Reject ---
                     const updateData = { 
                         status: action === 'approve' ? 'approved' : 'rejected', 
                         decisionAt: serverTimestamp(), 
@@ -459,18 +593,15 @@
                     showCustomAlert("ជោគជ័យ!", `សំណើ (${requestId}) ត្រូវបាន ${action === 'approve' ? 'អនុម័ត' : 'បដិសេធ'} ដោយជោគជ័យ។`, "success");
                 
                 } else if (action === 'delete') {
-                    // --- [NEW] Handle Delete ---
                     await deleteDoc(docRef);
                     console.log(`Request ${requestId} successfully deleted.`);
                     showCustomAlert("បានលុប!", `សំណើ (${requestId}) ត្រូវបានលុបចេញពីមូលដ្ឋានទិន្នន័យ។`, "success");
                 }
-                // The onSnapshot listener will handle updating the UI
             
             } catch (error) {
                 console.error(`Error ${action}ing request ${requestId}:`, error);
                 showCustomAlert("Error", `មានបញ្ហា ${action} សំណើ: ${error.message}`);
                 
-                // Re-enable button on failure
                 if (originalButton) {
                     originalButton.disabled = false; 
                     if (action === 'approve') originalButton.innerHTML = `<i class="fas fa-check fa-fw"></i> អនុម័ត`;
@@ -508,13 +639,29 @@
         .spinner { border: 4px solid rgba(0, 0, 0, 0.1); width: 24px; height: 24px; border-radius: 50%; border-left-color: #3b82f6; /* blue-500 */ animation: spin 1s ease infinite; }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
         .break-inside-avoid { break-inside: avoid; page-break-inside: avoid; }
-        /* Style the select arrow (No longer used, but kept for reference) */
-        /* select { ... } */
-
-        /* [NEW] Add padding to the bottom of the list to make space for the footer nav */
-        #request-list {
+        
+        /* [NEW] Add padding to the bottom of the list/settings to make space for the footer nav */
+        #main-content-area, #settings-page {
             padding-bottom: 80px; /* Adjust as needed */
         }
+
+        /* [NEW] Toggle Switch Styles */
+        .toggle-label {
+            @apply block overflow-hidden cursor-pointer h-7 w-12 rounded-full bg-gray-300 transition-colors duration-200 ease-in-out;
+        }
+        .toggle-checkbox {
+            @apply absolute left-0 opacity-0 w-0 h-0;
+        }
+        .toggle-dot {
+            @apply block w-5 h-5 rounded-full bg-white shadow-md transform translate-x-1 translate-y-1 transition-transform duration-200 ease-in-out;
+        }
+        .toggle-checkbox:checked + .toggle-label {
+            @apply bg-blue-600;
+        }
+        .toggle-checkbox:checked + .toggle-label .toggle-dot {
+            @apply transform translate-x-6;
+        }
+
     </style>
 </head>
 <body class="bg-gray-50">
@@ -526,11 +673,9 @@
             <h1 class="text-xl font-bold text-center">Admin - គ្រប់គ្រង​សំណើ</h1>
         </header>
 
-        <!-- [REMOVED] Filter Section -->
-        <!-- The <select> dropdown was here -->
-
         <!-- Main Content Area (Scrollable Request List) -->
-        <main class="flex-grow overflow-y-auto p-4 bg-gray-50">
+        <!-- [MODIFIED] Added ID here -->
+        <main id="main-content-area" class="flex-grow overflow-y-auto p-4 bg-gray-50">
             <!-- Loading Indicator -->
             <div id="loading-indicator" class="text-center py-16">
                 <div class="spinner inline-block w-8 h-8"></div>
@@ -552,26 +697,66 @@
             </div>
 
             <!-- Request List Container -->
-            <!-- The bottom padding is now handled by the style tag -->
-            <div id="request-list" class="space-y-4">
+            <!-- ClassName will be set by JS (space-y-4 or grid) -->
+            <div id="request-list" class="">
                 <!-- Request cards will be injected here by JavaScript -->
             </div>
         </main>
 
-        <!-- [NEW] Footer Navigation Bar -->
+        <!-- [NEW] Settings Page -->
+        <div id="settings-page" class="flex-grow overflow-y-auto p-4 bg-gray-50 hidden">
+            <h2 class="text-lg font-semibold text-gray-800 mb-4 border-b pb-2">ការកំណត់ (Settings)</h2>
+            
+            <div class="space-y-5">
+                <!-- Setting 1: Month Filter -->
+                <div class="flex items-center justify-between bg-white p-3 rounded-lg shadow-sm border border-gray-200">
+                    <div>
+                        <label for="toggle-month-filter" class="font-medium text-gray-700">ត្រងយកតែខែបច្ចុប្បន្ន</label>
+                        <p class="text-xs text-gray-500">បង្ហាញតែសំណើក្នុងខែនេះ គ្រប់ Page។</p>
+                    </div>
+                    <div class="relative inline-block w-12 h-7 align-middle select-none">
+                        <input type="checkbox" name="toggle-month-filter" id="toggle-month-filter" class="toggle-checkbox"/>
+                        <label for="toggle-month-filter" class="toggle-label"><span class="toggle-dot"></span></label>
+                    </div>
+                </div>
+
+                <!-- Setting 2: Compact View -->
+                <div class="flex items-center justify-between bg-white p-3 rounded-lg shadow-sm border border-gray-200">
+                    <div>
+                        <label for="toggle-compact-view" class="font-medium text-gray-700">បង្ហាញទិន្នន័យខ្លីៗ</label>
+                        <p class="text-xs text-gray-500">ក្នុង Page 'បានយល់ព្រម' បង្ហាញ Card តូចៗ។</p>
+                    </div>
+                    <div class="relative inline-block w-12 h-7 align-middle select-none">
+                        <input type="checkbox" name="toggle-compact-view" id="toggle-compact-view" class="toggle-checkbox"/>
+                        <label for="toggle-compact-view" class="toggle-label"><span class="toggle-dot"></span></label>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+
+        <!-- [MODIFIED] Footer Navigation Bar -->
         <nav id="footer-nav" class="sticky bottom-0 w-full bg-white border-t border-gray-200 shadow-lg z-20">
             <div class="max-w-md mx-auto flex justify-around items-center h-16">
+                <!-- Filter: Pending -->
                 <button data-filter="pending" class="filter-nav-btn flex-1 flex justify-center items-center h-full text-center text-gray-500 hover:text-blue-600 transition-colors duration-150">
                     <i class="fas fa-hourglass-half fa-lg"></i>
                 </button>
+                <!-- Filter: Approved -->
                 <button data-filter="approved" class="filter-nav-btn flex-1 flex justify-center items-center h-full text-center text-gray-500 hover:text-blue-600 transition-colors duration-150">
                     <i class="fas fa-check-circle fa-lg"></i>
                 </button>
+                <!-- Filter: Rejected -->
                 <button data-filter="rejected" class="filter-nav-btn flex-1 flex justify-center items-center h-full text-center text-gray-500 hover:text-blue-600 transition-colors duration-150">
                     <i class="fas fa-times-circle fa-lg"></i>
                 </button>
+                <!-- Filter: All -->
                 <button data-filter="all" class="filter-nav-btn flex-1 flex justify-center items-center h-full text-center text-gray-500 hover:text-blue-600 transition-colors duration-150">
                     <i class="fas fa-grip-horizontal fa-lg"></i>
+                </button>
+                <!-- [NEW] Page: Settings -->
+                <button data-filter="settings" class="filter-nav-btn flex-1 flex justify-center items-center h-full text-center text-gray-500 hover:text-blue-600 transition-colors duration-150">
+                    <i class="fas fa-cog fa-lg"></i>
                 </button>
             </div>
         </nav>
@@ -580,6 +765,7 @@
 
      <!-- Custom Alert Modal (For Success/Error) -->
     <div id="custom-alert-modal" class="fixed inset-0 z-[60] flex items-center justify-center bg-black bg-opacity-50 hidden p-4">
+        <!-- ... modal content ... -->
         <div class="bg-white p-6 rounded-lg shadow-xl w-full max-w-sm text-center">
             <svg id="custom-alert-icon-warning" xmlns="http://www.w3.org/2000/svg" class="h-12 w-12 mx-auto text-red-500 hidden" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"> <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /> </svg>
             <svg id="custom-alert-icon-success" xmlns="http://www.w3.org/2000/svg" class="h-12 w-12 mx-auto text-green-500 hidden" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"> <path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /> </svg>
@@ -591,27 +777,34 @@
 
     <!-- Confirmation Modal (For Approve/Reject/Delete) -->
     <div id="confirmation-modal" class="fixed inset-0 z-[70] flex items-center justify-center bg-black bg-opacity-75 hidden p-4">
+        <!-- ... modal content ... -->
         <div class="bg-white p-6 rounded-lg shadow-xl w-full max-w-sm text-center">
-            <!-- Icon -->
             <svg xmlns="http://www.w3.org/2000/svg" class="h-12 w-12 mx-auto text-yellow-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
-            <!-- Title -->
             <h3 id="confirmation-title" class="text-xl font-bold mt-4 mb-2 text-gray-800">សួរបញ្ជាក់</h3>
-            <!-- Message -->
             <p id="confirmation-message" class="text-gray-600 mb-6 text-sm whitespace-pre-line">...</p>
-            <!-- Buttons -->
             <div class="flex justify-center gap-4">
-                <button id="confirm-no-btn" class="bg-gray-200 text-gray-800 py-2 px-6 rounded-lg font-semibold hover:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-400 focus:ring-offset-2">
-                    បោះបង់
-                </button>
-                <button id="confirm-yes-btn" data-id="" data-type="" data-action="" class="text-white py-2 px-6 rounded-lg font-semibold shadow-md focus:outline-none focus:ring-2 focus:ring-offset-2">
-                    <!-- Class and text will be set by JS -->
-                    យល់ព្រម
-                </button>
+                <button id="confirm-no-btn" class="bg-gray-200 text-gray-800 py-2 px-6 rounded-lg font-semibold hover:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-400 focus:ring-offset-2"> បោះបង់ </button>
+                <button id="confirm-yes-btn" data-id="" data-type="" data-action="" class="text-white py-2 px-6 rounded-lg font-semibold shadow-md focus:outline-none focus:ring-2 focus:ring-offset-2"> យល់ព្រម </button>
             </div>
         </div>
     </div>
+
+    <!-- [NEW] Request Detail Modal (for Compact View) -->
+    <div id="request-detail-modal" class="fixed inset-0 z-[65] flex items-center justify-center bg-black bg-opacity-60 hidden p-4">
+        <div class="bg-white p-4 rounded-lg shadow-xl w-full max-w-md relative max-h-[80vh] overflow-y-auto">
+            <!-- Close Button -->
+            <button id="detail-modal-close-btn" class="absolute top-2 right-2 text-gray-400 hover:text-gray-600 bg-gray-100 rounded-full w-7 h-7 flex items-center justify-center">
+                <i class="fas fa-times"></i>
+            </button>
+            <!-- Content -->
+            <div id="detail-modal-content" class="mt-6">
+                <!-- Details will be injected here by JS -->
+            </div>
+        </div>
+    </div>
+
 
 </body>
 </html>
