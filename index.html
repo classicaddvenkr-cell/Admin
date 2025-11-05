@@ -545,13 +545,14 @@
         }
         
         // --- [NEW] Render Compact Card ---
+        // --- [BUG FIX] Changed 'classclass' to 'class' ---
         function renderCompactCard(request) {
             const typeText = request.type === 'leave' ? 'ច្បាប់ឈប់' : 'ចេញក្រៅ';
             const typeColor = request.type === 'leave' ? 'bg-blue-100 text-blue-800' : 'bg-green-100 text-green-800';
             const typeDarkColor = request.type === 'leave' ? 'dark:bg-blue-900 dark:text-blue-200' : 'dark:bg-green-900 dark:text-green-200';
             
             return `
-            <div classclass="compact-card-btn card-bg border border-primary rounded-lg p-2 shadow-sm hover:shadow-md hover:border-blue-400 cursor-pointer transition-all duration-150" data-id="${request.id}" data-type="${request.type}">
+            <div class="compact-card-btn card-bg border border-primary rounded-lg p-2 shadow-sm hover:shadow-md hover:border-blue-400 cursor-pointer transition-all duration-150" data-id="${request.id}" data-type="${request.type}">
                 <div class="flex items-center gap-2">
                     ${request.photo ? `<img src="${request.photo}" class="w-8 h-8 rounded-full object-cover flex-shrink-0" onerror="this.onerror=null; this.src='https://placehold.co/32x32/e2e8f0/64748b?text=?';">` : `<div class="w-8 h-8 rounded-full bg-secondary text-secondary flex items-center justify-center flex-shrink-0"><i class="fas fa-user"></i></div>`}
                     <div class="overflow-hidden min-w-0">
@@ -978,9 +979,20 @@
              background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3E%3Cpath stroke='%239ca3af' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3E%3C/svg%3E");
         }
         
-        /* [NEW] Settings Card Style */
+        /* [MODIFIED] Settings Card Style */
         .settings-card {
             @apply bg-primary p-3 rounded-lg shadow-sm border border-primary;
+        }
+
+        /* [MODIFIED] Segmented Control Styles (Higher Contrast) */
+        .segmented-control {
+            @apply flex w-full p-1 rounded-lg bg-secondary; /* Use theme bg-secondary, add more padding */
+        }
+        .segmented-label {
+            @apply block text-sm font-medium text-center text-secondary p-1.5 rounded-md cursor-pointer transition-colors duration-200 flex-1;
+        }
+        .settings-radio:checked + .segmented-label {
+            @apply card-bg text-primary shadow-md font-medium; /* Use card-bg for high contrast */
         }
 
 
@@ -1070,18 +1082,18 @@
                         </div>
                     </div>
                     
-                    <!-- Approved Type Filter -->
+                    <!-- [MODIFIED] Approved Type Filter -->
                     <div>
                         <label class="text-sm font-medium text-primary mb-2 block">ត្រងតាមប្រភេទសំណើ</label>
-                        <div class="grid grid-cols-3 gap-2">
+                        <div class="segmented-control">
                             <input type="radio" name="approved-filter-type" id="filter-type-all" value="all" class="hidden settings-radio">
-                            <label for="filter-type-all" class="settings-radio-label flex-1 text-center">ទាំងអស់</label>
+                            <label for="filter-type-all" class="segmented-label">ទាំងអស់</label>
                             
                             <input type="radio" name="approved-filter-type" id="filter-type-leave" value="leave" class="hidden settings-radio">
-                            <label for="filter-type-leave" class="settings-radio-label flex-1 text-center">តែច្បាប់ឈប់</label>
+                            <label for="filter-type-leave" class="segmented-label">តែច្បាប់ឈប់</label>
                             
                             <input type="radio" name="approved-filter-type" id="filter-type-out" value="out" class="hidden settings-radio">
-                            <label for="filter-type-out" class="settings-radio-label flex-1 text-center">តែចេញក្រៅ</label>
+                            <label for="filter-type-out" class="segmented-label">តែចេញក្រៅ</label>
                         </div>
                     </div>
                     
@@ -1112,24 +1124,24 @@
                         <i class="fas fa-palette text-secondary w-5 text-center"></i>
                         <h3 class="font-medium text-primary text-lg">ស្បែក & ពណ៌ (Theme & Style)</h3>
                      </div>
-                     <!-- Dark Mode -->
+                     <!-- [MODIFIED] Dark Mode -->
                      <div>
                         <label class="text-sm font-medium text-primary mb-2 block">ពណ៌ (ថ្ងៃ/យប់)</label>
-                        <div class="grid grid-cols-3 gap-2">
+                        <div class="segmented-control">
                             <input type="radio" name="dark-mode-select" id="dark-auto" value="auto" class="hidden settings-radio">
-                            <label for="dark-auto" class="settings-radio-label flex-1 text-center">ស្វ័យប្រវត្តិ</label>
+                            <label for="dark-auto" class="segmented-label">ស្វ័យប្រវត្តិ</label>
                             
                             <input type="radio" name="dark-mode-select" id="dark-light" value="light" class="hidden settings-radio">
-                            <label for="dark-light" class="settings-radio-label flex-1 text-center">ថ្ងៃ (Light)</label>
+                            <label for="dark-light" class="segmented-label">ថ្ងៃ</label>
                             
                             <input type="radio" name="dark-mode-select" id="dark-dark" value="dark" class="hidden settings-radio">
-                            <label for="dark-dark" class="settings-radio-label flex-1 text-center">យប់ (Dark)</label>
+                            <label for="dark-dark" class="segmented-label">យប់</label>
                         </div>
                     </div>
                     
-                    <!-- Style Selector -->
+                    <!-- [MODIFIED] Style Selector (Fixed Khmer text) -->
                     <div>
-                        <label for="theme-select" class="text-sm font-medium text-primary mb-2 block">รูปแบบ Style</label>
+                        <label for="theme-select" class="text-sm font-medium text-primary mb-2 block">ជ្រើសរើស Style</label>
                         <select id="theme-select" class="settings-select">
                             <option value="original">Style ដើម (Original)</option>
                             <option value="glass">កញ្ចក់ថ្លា (Glass)</option>
